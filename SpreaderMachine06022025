@@ -1,0 +1,234 @@
+#include <FastLED.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <SPI.h>
+#include <Bounce2.h>
+#include <AccelStepper.h>
+//------PIN DEFINE BEGIN---------------
+#define LED_PIN     3
+#define NUM_LEDS    1
+#define SDA 21
+#define SCL 47
+
+
+#define buttonPin1 17
+#define buttonPin2 18
+#define buttonPin3 8
+#define buttonPin4 35
+#define buttonPin5 36
+#define buttonPin6 37
+
+Bounce button1;
+Bounce button2;
+Bounce button3;
+Bounce button4;
+Bounce button5;
+Bounce button6;
+
+// Define pins for Motor 1 (alternating direction)
+#define STEP_PIN1  42
+#define DIR_PIN1   41
+
+// Define pins for Motor 2 (continuous speed)
+#define STEP_PIN2  39
+#define DIR_PIN2   3
+
+AccelStepper motor1(AccelStepper::DRIVER, STEP_PIN1, DIR_PIN1);  // Alternating motor
+AccelStepper motor2(AccelStepper::DRIVER, STEP_PIN2, DIR_PIN2);  // Continuous motor
+
+
+const int enablePin = 40;
+const int PAUSE = 38;
+const int VGND=45;
+const int VVCC=48;
+#define SPI_SCK 9
+#define SPI_MISO 10
+#define SPI_MOSI 11
+#define DW_CS 12
+const uint8_t PIN_RST = 13; // reset pin
+const uint8_t PIN_IRQ = 14; // irq pin
+const uint8_t PIN_SS = 12;   // spi select pin
+//------PIN DEFINE END-----------------
+//GLOBAL VAR BEGIN----------------------
+int motor1Speed = 300;  // Speed for alternating motor
+int motor2Speed = 150;  // Speed for continuous motor
+int motor1Distance= 62;
+bool isPaused = false;
+bool enableFlag=true;
+bool motionFlag = true;       // Motor running state
+bool lastPauseState = HIGH; 
+
+//GLOBAL VAR END------------------------
+//---LIBRARY INIT BEGIN-------------------------------
+CRGB leds[NUM_LEDS];
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+//---LIBRARYINIT END-----------------------------------
+
+
+//-MULTITHREAD
+TaskHandle_t oledTaskHandle;
+void oledDisplayTask(void *pvParameters) {
+  for (;;) {  // Infinite loop for the task
+    // Clear the display buffer
+    display.clearDisplay();
+  display.setTextSize(2);             
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.print(F("S:"));
+  display.print(motor2Speed,0);
+  display.println(F("mm/s"));
+  display.setCursor(0,25);
+  display.print(F("F:"));
+  display.print(motor1Speed,0);
+  display.println(F("mm/s"));
+  display.setCursor(0,50);
+  display.print(F("D:"));
+  display.print(motor1Distance,0);
+  display.println(F("mm"));
+    
+//  display.setCursor(64,30); 
+//  display.setCursor(0,50); 
+////  display.print(percent,0) ;
+//  display.println(F("%"));                  
+//  display.setCursor(64,50); 
+//  if(motionFlag==false){display.println(F("STOP"));}
+//  if(motionFlag==true){display.println(F("RUN"));}    
+//  display.setCursor(0,0);
+//  display.print(F("S:"));
+////  display.println(speedmm,0) ;
+//  display.setCursor(0,30);
+//  display.print(F("L:33m"));
+  display.display();
+
+    // Delay for a short time to simulate frame rate (e.g., 500ms = 2FPS)
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+  }
+}
+
+void setup() {
+  pinMode(enablePin,OUTPUT);
+  pinMode(PAUSE,INPUT_PULLUP);
+  digitalWrite(enablePin,HIGH);
+  Serial.begin(115200);
+  Serial.println("Initializing...");
+  Wire.begin(SDA,SCL); 
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
+  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
+  pinMode(VGND,OUTPUT);digitalWrite(VGND,LOW);
+  pinMode(VVCC,OUTPUT);digitalWrite(VVCC,HIGH);
+  delay(100); 
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  pinMode(buttonPin1,INPUT);
+  pinMode(buttonPin2,INPUT);
+  pinMode(buttonPin3,INPUT);
+  pinMode(buttonPin4,INPUT);
+  pinMode(buttonPin5,INPUT);
+  pinMode(buttonPin6,INPUT);
+
+  motor1.setMaxSpeed(motor1Speed);
+  motor1.setAcceleration(100000);  // Fixed acceleration
+  motor1.moveTo(motor1Distance);          // Initial position target for alternating motion
+
+  motor2.setMaxSpeed(500);     // Set maximum speed for motor 2
+  motor2.setSpeed(motor2Speed); // Set initial speed (continuous motion)
+
+  button1.attach(buttonPin1);
+  button2.attach(buttonPin2);
+  button3.attach(buttonPin3);
+  button4.attach(buttonPin4);
+  button5.attach(buttonPin5);
+  button6.attach(buttonPin6);
+
+  button1.interval(50);
+  button2.interval(50);
+  button3.interval(50);
+  button4.interval(50);
+  button5.interval(50);
+  button6.interval(50);
+
+   
+  delay(1000);
+
+
+    xTaskCreatePinnedToCore(
+    oledDisplayTask,  // Function to be called
+    "OLED Display Task",  // Name of the task
+    10000,           // Stack size (in bytes)
+    NULL,            // Parameter to pass to the task
+    1,               // Task priority (1 is low)
+    &oledTaskHandle, // Task handle
+    1                // Core to run the task on (0 or 1)
+  );
+}
+
+void loop() {
+
+bool currentPauseState = digitalRead(PAUSE);
+
+  // Detect state change (HIGH -> LOW or LOW -> HIGH)
+  if (currentPauseState != lastPauseState) {
+    if (currentPauseState == LOW) {
+      // Button pressed: Pause the motors
+      motionFlag = false;
+      pauseMotors();
+    } else {
+      // Button released: Resume the motors
+      motionFlag = true;
+      resumeMotors();
+    }
+    // Update the last state
+    lastPauseState = currentPauseState;
+  }
+
+
+button1.update();
+button2.update();
+button3.update();
+button4.update();
+button5.update();
+button6.update();
+
+//enableFlag=!enableFlag;
+if (button1.fell()) {motor2Speed+=10; if (motor2Speed>1000){motor2Speed=1000;}}
+if (button2.fell()) {motor2Speed-=10; if (motor2Speed<10){motor2Speed=10;}}
+if (button3.fell()) {motor1Speed+=10; if (motor1Speed>1000){motor1Speed=1000;}}
+if (button4.fell()) {motor1Speed-=10; if (motor1Speed<10){motor1Speed=10;}}
+if (button5.fell()) {motor1Distance+=1; if (motor1Distance>100){motor1Distance=100;}}
+if (button6.fell()) {motor1Distance-=1; if (motor1Distance<1){motor1Distance=1;}}
+
+
+  if (motionFlag) {
+    motor1.setMaxSpeed(motor1Speed);
+    motor1.run(); 
+  if (motor1.distanceToGo() == 0) {
+    if (motor1.currentPosition() == 0) {
+      motor1.moveTo(int(motor1Distance/4*800));
+    } else {
+      motor1.moveTo(0);
+    }
+  }
+    motor2.setSpeed(motor2Speed);
+    motor2.runSpeed();
+  }
+}
+
+void pauseMotors() {
+  isPaused = true;
+  motor1.stop();  // Stop motor 1 immediately
+  motor2.stop();  // Stop motor 2 immediately
+  Serial.println("Motors Paused");
+}
+
+void resumeMotors() {
+  isPaused = false;
+  motor1.moveTo(motor1.currentPosition());  // Resume motor 1 from the current position
+  Serial.println("Motors Resumed");
+}
